@@ -10,7 +10,7 @@ bpe/
   regex.py    RegexTokenizer  - GPT-2/GPT-4 split patterns + special tokens
   gpt2.py     GPT2Tokenizer   - loads OpenAI's encoder.json / vocab.bpe
 tests/        216 tests, including exact-match tests against tiktoken
-benchmarks/   compression.py  - bytes per token vs vocab size, held out
+benchmarks/   compression_ratio.py - bytes per token vs vocab size, held out
 ```
 
 ## How it works, on one string
@@ -155,17 +155,17 @@ Gutenberg corpus) skip cleanly when it is unavailable rather than failing.
 
 ## Compression
 
-How much does a bigger vocabulary actually buy you? `benchmarks/compression.py`
-trains on the first 80% of the Sherlock Holmes corpus (460,853 bytes) and
-measures bytes per token on the last 20% (114,940 bytes), which the tokenizer
-never saw.
+How much does a bigger vocabulary actually buy you?
+`benchmarks/compression_ratio.py` trains on the first 80% of the Sherlock
+Holmes corpus (460,853 bytes) and measures bytes per token on the last 20%
+(114,940 bytes), which the tokenizer never saw.
 
 ![bytes per token against vocabulary size](benchmarks/compression.png)
 
 ```bash
-.venv/bin/python benchmarks/compression.py            # ~18 min, writes .png + .json
-.venv/bin/python benchmarks/compression.py --quick    # ~3 min, powers of two to 2,048
-.venv/bin/python benchmarks/compression.py --replot   # redraw from the saved json
+.venv/bin/python benchmarks/compression_ratio.py           # ~18 min, writes .png + .json
+.venv/bin/python benchmarks/compression_ratio.py --quick   # ~3 min, powers of two to 2,048
+.venv/bin/python benchmarks/compression_ratio.py --replot  # redraw from the saved json
 ```
 
 Nearly all of that time is `BasicTokenizer`, which has no split pattern and so
@@ -299,8 +299,10 @@ The suite takes just over a minute, most of it in the two training runs in
   or a control character. `unicode_to_bytes` inverts it.
 - **The `regex` package, not stdlib `re`.** The split patterns need `\p{L}`,
   `\p{N}`, and possessive quantifiers.
-- **`benchmarks/compression.py` shadows a stdlib package.** Since Python 3.14
-  `compression` is a stdlib package, and `bz2` imports from it. Running the
-  benchmark as a script puts `benchmarks/` first on `sys.path`, so the file
-  drops its own directory from `sys.path` before importing anything else.
-  `test_compression_benchmark.py::test_runs_as_a_script` guards it.
+- **No module here is named after a stdlib module.** Running a script puts its
+  own directory first on `sys.path`, so such a file shadows the real module for
+  everything imported afterwards. This is why the benchmark is
+  `compression_ratio.py` and not `compression.py`: `compression` became a
+  stdlib package in Python 3.14 and `bz2` imports from it, so the shorter name
+  broke `bz2` → `shutil` → `matplotlib`.
+  `test_no_module_shadows_a_stdlib_module` keeps the whole repo clear of it.

@@ -6,42 +6,36 @@ compression on a slice they never saw, across log-spaced vocab sizes from 256
 (no merges at all, 1.00 bytes/token by definition) up to 8192. GPT-2's ratio on
 the same held-out text is drawn as a reference.
 
-    python benchmarks/compression.py                  # bundled Sherlock Holmes
-    python benchmarks/compression.py --quick          # ~1 min, coarser sweep
-    python benchmarks/compression.py --input book.txt --holdout-frac 0.2
-    python benchmarks/compression.py --train a.txt --holdout b.txt
+    python benchmarks/compression_ratio.py                  # bundled Sherlock Holmes
+    python benchmarks/compression_ratio.py --quick          # ~3 min, coarser sweep
+    python benchmarks/compression_ratio.py --input book.txt --holdout-frac 0.2
+    python benchmarks/compression_ratio.py --train a.txt --holdout b.txt
 
 Writes benchmarks/compression.png and benchmarks/compression.json; --replot
 redraws the figure from that json without retraining.
+
+Not named compression.py: running a script puts its own directory first on
+sys.path, and `compression` is a stdlib package as of Python 3.14 (bz2 does
+`from compression._common import _streams`), so that name shadows it and
+breaks bz2 -> shutil -> matplotlib.
 """
 
 from __future__ import annotations
 
-# This module is named `compression`, which since Python 3.14 is also a stdlib
-# package (bz2 does `from compression._common import _streams`). Running this
-# file as a script puts benchmarks/ at the front of sys.path, where it would
-# shadow that package and break bz2 -> shutil -> matplotlib. So drop our own
-# directory from sys.path and add the repo root, before importing anything
-# else. `os` and `sys` are already loaded at interpreter startup.
-import os
+import argparse
+import copy
+import json
 import sys
+import time
+from pathlib import Path
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(_HERE)
-sys.path[:] = [p for p in sys.path if os.path.abspath(p or os.getcwd()) != _HERE]
-sys.path.insert(0, _REPO_ROOT)
-
-import argparse  # noqa: E402
-import copy  # noqa: E402
-import json  # noqa: E402
-import time  # noqa: E402
-from pathlib import Path  # noqa: E402
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
 from bpe import BasicTokenizer, RegexTokenizer  # noqa: E402
 from bpe.base import Tokenizer  # noqa: E402
 from bpe.gpt2 import GPT2Tokenizer  # noqa: E402
 
-REPO_ROOT = Path(_REPO_ROOT)
 OUT_PNG = REPO_ROOT / "benchmarks" / "compression.png"
 OUT_JSON = REPO_ROOT / "benchmarks" / "compression.json"
 
@@ -75,7 +69,6 @@ def load_default_corpus() -> str:
     Reuses conftest's downloader rather than duplicating it, so the benchmark
     and the tests measure the same bytes from the same cache.
     """
-    sys.path.insert(0, str(REPO_ROOT))
     from conftest import download_corpus, strip_gutenberg_boilerplate
 
     raw = download_corpus().read_text(encoding="utf-8").replace("\r\n", "\n")

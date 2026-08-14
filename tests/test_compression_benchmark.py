@@ -1,13 +1,13 @@
 """
-Tests for benchmarks/compression.py.
+Tests for benchmarks/compression_ratio.py.
 
 Two things here are worth pinning. The first is the prefix property the sweep
 depends on: `truncated(tok, V)` is claimed to be indistinguishable from having
 trained to V in the first place, and if that is ever false the whole curve is
-quietly wrong. The second is that the file runs as a script at all — it is
-named `compression`, which shadows a stdlib package (see the note at the top
-of the benchmark), so the guard against that needs a test that actually spawns
-a subprocess.
+quietly wrong. The second is that the file runs as a script at all, which only
+a subprocess can check — a script's own directory goes first on sys.path, so a
+benchmark named after a stdlib module breaks on import rather than at the line
+that uses it.
 
 The benchmark lives outside any package, so it is loaded by path.
 """
@@ -25,7 +25,7 @@ import pytest
 from bpe import BasicTokenizer, RegexTokenizer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-BENCHMARK = REPO_ROOT / "benchmarks" / "compression.py"
+BENCHMARK = REPO_ROOT / "benchmarks" / "compression_ratio.py"
 
 # enough text to support a few hundred merges without being slow
 SAMPLE = (REPO_ROOT / "bpe" / "regex.py").read_text(encoding="utf-8") * 3
@@ -33,7 +33,7 @@ SAMPLE = (REPO_ROOT / "bpe" / "regex.py").read_text(encoding="utf-8") * 3
 
 @pytest.fixture(scope="module")
 def bench():
-    """Import benchmarks/compression.py under a name that can't shadow stdlib."""
+    """The benchmark is not importable by name; load it from its path."""
     spec = importlib.util.spec_from_file_location("benchmark_compression", BENCHMARK)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -134,12 +134,31 @@ def test_split_corpus_is_contiguous_and_complete(bench):
 # -- the filename hazard ------------------------------------------------------
 
 
+def test_no_module_shadows_a_stdlib_module():
+    """
+    No .py file in the repo may be named after a top-level stdlib module.
+
+    Running any script puts its own directory first on sys.path, so such a file
+    shadows the real module for everything imported afterwards. This bit once:
+    the benchmark was briefly named compression.py, and `compression` became a
+    stdlib package in Python 3.14, which broke bz2 -> shutil -> matplotlib.
+    Renaming was the fix; this keeps it renamed.
+    """
+    offenders = [
+        path.relative_to(REPO_ROOT)
+        for path in REPO_ROOT.rglob("*.py")
+        if ".venv" not in path.parts and path.stem in sys.stdlib_module_names
+    ]
+    assert not offenders, f"these shadow stdlib modules: {offenders}"
+
+
 def test_runs_as_a_script(tmp_path):
     """
-    End-to-end run in a subprocess, which is the only way to exercise the
-    sys.path guard: only a real `python benchmarks/compression.py` puts
-    benchmarks/ at sys.path[0], where this file would otherwise shadow the
-    stdlib `compression` package and break matplotlib's import of shutil.
+    End-to-end run in a subprocess.
+
+    Only a real `python benchmarks/compression_ratio.py` reproduces the script
+    sys.path layout, so an import-time collision would show up here and nowhere
+    else in the suite.
     """
     corpus = tmp_path / "corpus.txt"
     corpus.write_text(SAMPLE[:20_000], encoding="utf-8")
