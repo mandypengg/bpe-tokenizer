@@ -116,6 +116,34 @@ def test_known_token_ids(ours):
     assert ours.byte_to_id[ord("!")] == 0
 
 
+# -- leading space ------------------------------------------------------------
+# ` ?\p{L}+` folds one leading space into the word, so a word preceded by a
+# space is a different token from the bare word. This is the usual place GPT-2
+# parity silently drifts, so pin the exact ids rather than just the inequality.
+
+
+def test_leading_space_produces_a_different_token(ours):
+    assert ours.encode_ordinary("hello") == [31373]
+    assert ours.encode_ordinary(" hello") == [23748]
+    assert ours.encode_ordinary("hello") != ours.encode_ordinary(" hello")
+
+
+@pytest.mark.parametrize("text", [
+    "hello", " hello", "  hello", "   hello", "hello ", "hello  ",
+    "Hello", " Hello", " HELLO", "\nhello", "\thello", " 123", "123",
+    " .", ".", " 'tis", "'tis",
+])
+def test_leading_space_variants_match_tiktoken(ours, reference, text):
+    assert ours.encode_ordinary(text) == reference.encode_ordinary(text)
+
+
+def test_only_one_space_folds_into_the_word(ours, reference):
+    # the extra spaces are their own chunk; " hello" keeps exactly one
+    ids = ours.encode_ordinary("  hello")
+    assert ids == reference.encode_ordinary("  hello")
+    assert ids[-1] == ours.encode_ordinary(" hello")[0]
+
+
 def test_training_is_refused(ours):
     with pytest.raises(NotImplementedError):
         ours.train("hello", 300)
