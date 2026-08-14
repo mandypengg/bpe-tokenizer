@@ -1,19 +1,278 @@
 # bpe-tokenizer
 
 A byte-pair-encoding tokenizer written from scratch, whose encoder reproduces
-GPT-2's tokenization exactly (verified against `tiktoken`).
-
-## Layout
+GPT-2's tokenization exactly, token for token, verified against `tiktoken`.
 
 ```
 bpe/
-  base.py     get_stats / merge primitives, Tokenizer base class, save+load
+  base.py     get_stats / merge primitives, Tokenizer base class, save + load
   basic.py    BasicTokenizer  - byte-level BPE, no splitting
   regex.py    RegexTokenizer  - GPT-2/GPT-4 split patterns + special tokens
   gpt2.py     GPT2Tokenizer   - loads OpenAI's encoder.json / vocab.bpe
-tests/        pytest suite, including exact-match tests against tiktoken
-benchmarks/   compression ratio vs vocab size, with a matplotlib plot
+tests/        216 tests, including exact-match tests against tiktoken
+benchmarks/   compression.py  - bytes per token vs vocab size, held out
 ```
+
+## How it works, on one string
+
+Train on `"low low lower lowest"` and ask for a vocabulary of 260, which is
+the 256 byte values plus four merges:
+
+```python
+from bpe import BasicTokenizer
+
+tok = BasicTokenizer()
+tok.train("low low lower lowest", vocab_size=260)
+```
+
+The text starts as 20 bytes, one token each. Each round counts every adjacent
+pair, merges the most frequent one everywhere at once, and gives the result a
+new id:
+
+| # | most frequent pair | count | new token | id | sequence after |
+|---|---|---|---|---|---|
+| — | — | — | — | — | `l o w ␣ l o w ␣ l o w e r ␣ l o w e s t` (20) |
+| 0 | `l` + `o` | 4 | `lo` | 256 | `lo w ␣ lo w ␣ lo w e r ␣ lo w e s t` (16) |
+| 1 | `lo` + `w` | 4 | `low` | 257 | `low ␣ low ␣ low e r ␣ low e s t` (12) |
+| 2 | `␣` + `low` | 3 | `␣low` | 258 | `low ␣low ␣low e r ␣low e s t` (9) |
+| 3 | `␣low` + `e` | 2 | `␣lowe` | 259 | `low ␣low ␣lowe r ␣lowe s t` (7) |
+
+Four things this shows, all of which the implementation has to get right:
+
+- **New tokens are built from old ones.** Step 1 merges `lo`, itself a token
+  from step 0. Every token is a tree over the 256 byte tokens, which is why
+  `vocab[idx] == vocab[p0] + vocab[p1]` holds for every merge.
+- **Merges are ordered, and the order is the priority.** `lo` must be applied
+  before `low`, or `low` is unreachable. Encoding replays merges by rank, not
+  by frequency in the text being encoded, which is what makes encoding agree
+  with training. Storing the merges in anything unordered destroys this.
+- **The space binds forward.** Step 2 learns `␣low`, not `low␣`. Mid-sentence
+  words carry their leading space, so `dog` and `␣dog` are different tokens
+  with different ids (in GPT-2, `9703` and `3290`).
+- **Ties go to the leftmost pair.** In step 0 both `l`+`o` and `o`+`w` occur 4
+  times; `max()` over the counts dict keeps the first one inserted, which is
+  the one that appears earliest in the text. Deterministic, but arbitrary.
+
+Training stops here only because we asked for 4 merges. There is nothing
+special about the pairs that remain: the next best pair, `low` + `␣low`, occurs
+just once, and a larger `vocab_size` would merge it anyway.
+
+Encoding the same string now costs 7 tokens instead of 20 bytes:
+
+```python
+tok.encode("low low lower lowest")
+# [257, 258, 259, 114, 259, 115, 116]
+# low  ␣low ␣lowe r   ␣lowe s   t
+```
+
+### What the split pattern changes
+
+`BasicTokenizer` merges across any byte boundary, so on repetitive text it will
+happily learn a token spanning a space. `RegexTokenizer` chops the text into
+chunks first (words, digit runs, punctuation runs, whitespace) and runs BPE
+inside each chunk, so no merge can cross a chunk boundary. The first six
+merges on `"the cat. the cat. the cat. the cat."`:
+
+```
+BasicTokenizer   th, the, "the ", "the c", "the ca", "the cat"
+RegexTokenizer   th, the, " c", " ca", " cat", " the"
+```
+
+The basic one spends its whole vocabulary memorizing one phrase. That is the
+entire reason real tokenizers split first. On `"low low lower lowest"` the two
+agree exactly, because a space precedes every occurrence of `low` anyway.
+
+## Correctness
+
+216 tests, `.venv/bin/python -m pytest`. Two properties are claimed, and they
+are claimed precisely.
+
+### 1. Roundtrip: `decode(encode(t)) == t`
+
+| where | tokenizer | cases |
+|---|---|---|
+| `test_roundtrip.py` | `BasicTokenizer`, `RegexTokenizer` trained on 300,000 characters of prose at vocab 512 | 3,000 strings each |
+| `test_roundtrip.py` | same two | the whole 562,202-character corpus as one string |
+| `test_tiktoken_parity.py` | `GPT2Tokenizer` | all 5,000 corpus strings |
+
+The 3,000 strings per tokenizer are 750 paragraphs, 750 lines, 750
+sentence-ish fragments, and 750 slices cut at arbitrary character offsets. The
+last group matters most: it cuts through the middle of words and multi-byte
+characters, and a tokenizer that only roundtrips well-formed input is not
+roundtripping, it is getting lucky. Samples are drawn from the whole corpus
+while training used only the first 300,000 characters, so 47% of the corpus
+they are drawn from is text the tokenizer never saw.
+
+The claim is `text -> ids -> text`, in that direction. The reverse,
+`ids -> text -> ids`, is not claimed and is not true in general: `decode` uses
+`errors="replace"`, so an id sequence that splits a multi-byte character does
+not survive a round trip through `str`.
+
+### 2. Parity: our GPT-2 encoder equals `tiktoken.get_encoding("gpt2")`
+
+Every case below is an exact token-sequence comparison, not a length or a
+similarity score.
+
+| test | comparison | cases |
+|---|---|---|
+| `test_encode_parity_over_full_corpus` | `encode_ordinary` | 5,000 |
+| `test_decode_parity_over_full_corpus` | `decode` of tiktoken's own ids | 5,000 |
+| `test_encode_parity_by_category` | `encode_ordinary`, split 13 ways | 5,000 |
+| `test_special_token_parity` | `encode(..., allowed_special="all")` | 100 |
+| `test_encode_parity_over_english_corpus` | 200,000 characters of prose, whole | 1 |
+| `test_encode_parity_over_english_corpus` | the same text, per paragraph | 200 |
+| `test_gpt2.py` | hand-picked strings, ids pinned | 12 |
+
+`tests/corpus.json` holds 5,000 unique strings, 278,165 characters, generated
+by `tests/build_corpus.py` across 13 categories:
+
+```
+emoji 600   english_prose 600   cjk 500   whitespace 400   code_python 400
+markdown 400   degenerate 350   code_javascript 350   code_c 350
+mixed_script 350   arabic 300   cyrillic 300   special_tokens 100
+```
+
+`degenerate` is the interesting one: the empty string, and several hundred
+single characters including every ASCII codepoint from NUL to DEL. Control
+characters, unpaired ZWJ, orphaned skin-tone modifiers and truncated grapheme
+clusters are all deliberately included — they are valid UTF-8, and a tokenizer
+has no business caring. Lone surrogates are the one deliberate exclusion: they
+survive `json.dumps` but not `.encode("utf-8")`, so they would fail for
+reasons that have nothing to do with BPE.
+
+`whitespace` covers the cases where GPT-2's `\s+(?!\S)` rule bites, such as a
+run of *n* spaces before a word splitting as *n*−1 spaces plus `␣word`.
+
+What is **not** claimed: only the GPT-2 encoding is verified against an
+external reference. `BasicTokenizer` and `RegexTokenizer` train their own
+vocabularies and are checked against the roundtrip property and internal
+invariants, not against any third-party implementation. `GPT4_SPLIT_PATTERN`
+ships and its splitting behaviour is tested, but no GPT-4 vocabulary is loaded
+and nothing here is compared against `cl100k_base`.
+
+Tests that need the network (OpenAI's vocab files, tiktoken's data, the
+Gutenberg corpus) skip cleanly when it is unavailable rather than failing.
+
+## Compression
+
+How much does a bigger vocabulary actually buy you? `benchmarks/compression.py`
+trains on the first 80% of the Sherlock Holmes corpus (460,853 bytes) and
+measures bytes per token on the last 20% (114,940 bytes), which the tokenizer
+never saw.
+
+![bytes per token against vocabulary size](benchmarks/compression.png)
+
+```bash
+.venv/bin/python benchmarks/compression.py            # ~18 min, writes .png + .json
+.venv/bin/python benchmarks/compression.py --quick    # ~3 min, powers of two to 2,048
+.venv/bin/python benchmarks/compression.py --replot   # redraw from the saved json
+```
+
+Nearly all of that time is `BasicTokenizer`, which has no split pattern and so
+encodes by repeatedly scanning one long token list; `RegexTokenizer` encodes
+the same held-out text in 0.08s at every vocab size.
+
+| vocab | Basic held-out | Basic train | Regex held-out | Regex train |
+|---|---|---|---|---|
+| 256 | 1.00 | 1.00 | 1.00 | 1.00 |
+| 512 | 2.22 | 2.22 | 2.18 | 2.15 |
+| 1,024 | 2.93 | 2.91 | 2.75 | 2.70 |
+| 2,048 | 3.60 | 3.60 | 3.17 | 3.17 |
+| 4,096 | 4.25 | 4.40 | 3.51 | 3.59 |
+| 8,192 | 4.87 | 5.36 | 3.75 | 3.94 |
+
+Vocab 256 is the no-merge baseline: one token per byte, 1.00, exactly.
+
+**Returns diminish, roughly logarithmically.** Each doubling of
+`RegexTokenizer`'s vocabulary adds less than the last: +1.18 bytes/token for
+256→512, then +0.57, +0.43, +0.34, +0.24. Thirty-two times the vocabulary
+between 256 and 8192 buys 3.75× the compression.
+
+**A small in-domain vocabulary catches a big general one.** `RegexTokenizer`
+at 8,192 reaches 3.75 bytes/token on this text; GPT-2, with 50,257 tokens,
+gets 3.74 on the same bytes. That is not a defeat for GPT-2 — it is the
+expected result of comparing a vocabulary trained on Victorian English prose
+against one that also has to cover code, CJK, emoji and every other thing on
+the internet, measured only on Victorian English prose. Point either tokenizer
+at a Python file and the ordering reverses.
+
+**`BasicTokenizer` looks better here and is not.** It reaches 4.87
+bytes/token because nothing stops it merging across spaces and punctuation, so
+it spends its vocabulary memorizing whole phrases from the training text. Two
+symptoms show up in the numbers. Its returns barely diminish (+0.71, +0.67,
++0.66, +0.62 per doubling — it keeps finding phrases), and its train/held-out
+gap opens up: at vocab 8,192 it compresses training text 9.1% better than
+held-out text, against 4.8% for `RegexTokenizer`. Below vocab 2,048 neither
+has a measurable gap; overfitting only starts once the vocabulary is big
+enough to memorize. Bytes per token is the metric being plotted here, but it
+is not the metric you want to maximize.
+
+Two caveats on the setup. The split is contiguous, so the held-out text is
+genuinely unseen prose, but it is the same author and register as the training
+half — these are in-domain generalization numbers, and out-of-domain numbers
+would be worse. And the sweep trains once at 8,192 and reads every smaller
+vocabulary off a prefix of that merge list, which is exact only because merges
+are ordered and training is greedy;
+`test_compression_benchmark.py` pins that equivalence against training each
+size directly.
+
+## Usage
+
+```python
+from bpe import BasicTokenizer, RegexTokenizer, GPT2Tokenizer
+```
+
+### Train your own
+
+```python
+tok = RegexTokenizer()                       # GPT-2's split pattern by default
+tok.train(open("corpus.txt").read(), vocab_size=1024)
+
+tok.encode("hello world")                    # -> [list of ids]
+tok.decode(tok.encode("hello world"))        # -> "hello world"
+
+tok.save("models/mine")                      # writes mine.model + mine.vocab
+loaded = RegexTokenizer()
+loaded.load("models/mine.model")
+```
+
+`mine.vocab` is for reading, not loading. Each learned token appears with the
+two children it came from — step 3 of the worked example above would be written:
+
+```
+[ low][e] -> [ lowe] 259
+```
+
+### Special tokens
+
+Special tokens are split out of the text *before* BPE runs, so their bytes are
+never eligible for merging:
+
+```python
+tok.register_special_tokens({"<|endoftext|>": 1024})
+
+tok.encode("hi<|endoftext|>", allowed_special="all")   # -> [..., 1024]
+tok.encode("hi<|endoftext|>", allowed_special="none")  # BPEs the literal text
+tok.encode("hi<|endoftext|>")                          # raises: default is none_raise
+```
+
+The default is `none_raise` so that a special token arriving inside untrusted
+user text is an error you see, rather than a silent injection.
+
+### GPT-2
+
+```python
+gpt2 = GPT2Tokenizer.from_pretrained()   # downloads to data/gpt2/ once, then cached
+
+gpt2.encode_ordinary("hello world")      # [31373, 995]
+gpt2.encode("hi<|endoftext|>", allowed_special="all")   # [5303, 50256]
+gpt2.decode([31373, 995])                # 'hello world'
+len(gpt2.vocab)                          # 50257
+```
+
+`GPT2Tokenizer.from_pretrained(download=False)` fails instead of hitting the
+network. `train()` and `load()` raise on this class: its merges come from
+OpenAI's files, and the point of it is to reproduce them exactly.
 
 ## Setup
 
@@ -23,38 +282,25 @@ python3 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-## Usage
-
-```python
-from bpe import RegexTokenizer, GPT2Tokenizer
-
-tok = RegexTokenizer()
-tok.train(open("corpus.txt").read(), vocab_size=1024)
-tok.register_special_tokens({"<|endoftext|>": 1024})
-tok.encode("hello world<|endoftext|>", allowed_special="all")
-tok.save("models/mine")          # -> mine.model, mine.vocab
-
-gpt2 = GPT2Tokenizer.from_pretrained()   # downloads to data/gpt2/ once
-gpt2.encode_ordinary("hello world")      # [31373, 995]
-```
-
-## Benchmarks
-
-```bash
-.venv/bin/python benchmarks/compression_ratio.py --input corpus.txt
-```
-
-Trains at a range of vocab sizes and plots bytes-per-token against vocab size,
-with GPT-2's ratio on the same corpus as a reference line.
+The suite takes just over a minute, most of it in the two training runs in
+`test_roundtrip.py`.
 
 ## Notes
 
-- Merges are ordered; the position in `Tokenizer.merges` is the priority.
-  Encoding always applies the lowest-ranked eligible pair, which is what makes
+- **Merges are ordered**; position in `Tokenizer.merges` is the priority.
+  Encoding applies the lowest-ranked eligible pair, which is what makes
   encoding agree with training.
-- GPT-2's single-byte tokens are not ids 0..255 — `encoder.json` assigns them
-  in `bytes_to_unicode` order. `GPT2Tokenizer` overrides `_byte_ids` to seed
-  encoding with that permutation; every tokenizer trained here uses the
-  identity mapping instead.
-- Requires the `regex` package rather than stdlib `re`, for `\p{L}` and
-  possessive quantifiers in the split patterns.
+- **GPT-2's single-byte tokens are not ids 0..255.** `encoder.json` assigns
+  them in `bytes_to_unicode` order, so byte `0x21` (`!`) is id 0.
+  `GPT2Tokenizer` overrides `_byte_ids` to seed encoding with that
+  permutation; tokenizers trained here use the identity mapping.
+- **`bytes_to_unicode` is a reversible byte-to-printable-character map**, so
+  GPT-2's vocab files can stay plain text with no token containing whitespace
+  or a control character. `unicode_to_bytes` inverts it.
+- **The `regex` package, not stdlib `re`.** The split patterns need `\p{L}`,
+  `\p{N}`, and possessive quantifiers.
+- **`benchmarks/compression.py` shadows a stdlib package.** Since Python 3.14
+  `compression` is a stdlib package, and `bz2` imports from it. Running the
+  benchmark as a script puts `benchmarks/` first on `sys.path`, so the file
+  drops its own directory from `sys.path` before importing anything else.
+  `test_compression_benchmark.py::test_runs_as_a_script` guards it.
