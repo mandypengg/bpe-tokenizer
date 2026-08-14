@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 data/
 benchmarks/*.png
+# the one the README embeds, plus the data behind its table
+!benchmarks/compression.png

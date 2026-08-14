@@ -1,0 +1,196 @@
+{
+  "train_bytes": 460853,
+  "holdout_bytes": 114940,
+  "sizes": [
+    256,
+    362,
+    512,
+    724,
+    1024,
+    1448,
+    2048,
+    2896,
+    4096,
+    5793,
+    8192
+  ],
+  "gpt2_ratio": 3.7436081164707034,
+  "results": [
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 256,
+      "holdout_ratio": 1.0,
+      "train_ratio": 1.0,
+      "holdout_tokens": 114940,
+      "encode_s": 0.00622945895884186
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 362,
+      "holdout_ratio": 1.7991703842842608,
+      "train_ratio": 1.7973985959438377,
+      "holdout_tokens": 63885,
+      "encode_s": 0.8366289589321241
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 512,
+      "holdout_ratio": 2.2175490044759996,
+      "train_ratio": 2.2170570605242776,
+      "holdout_tokens": 51832,
+      "encode_s": 1.9315110000316054
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 724,
+      "holdout_ratio": 2.589146937580249,
+      "train_ratio": 2.5707631633262116,
+      "holdout_tokens": 44393,
+      "encode_s": 3.3323657079599798
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 1024,
+      "holdout_ratio": 2.9298259029848843,
+      "train_ratio": 2.9060314657754516,
+      "holdout_tokens": 39231,
+      "encode_s": 5.340009250096045
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 1448,
+      "holdout_ratio": 3.273431492609575,
+      "train_ratio": 3.2476850220574764,
+      "holdout_tokens": 35113,
+      "encode_s": 8.039681207970716
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 2048,
+      "holdout_ratio": 3.5959204104617695,
+      "train_ratio": 3.603482653196863,
+      "holdout_tokens": 31964,
+      "encode_s": 11.414812041912228
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 2896,
+      "holdout_ratio": 3.920458421447575,
+      "train_ratio": 3.985169748015427,
+      "holdout_tokens": 29318,
+      "encode_s": 15.272041583084501
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 4096,
+      "holdout_ratio": 4.251368545642847,
+      "train_ratio": 4.402409201199824,
+      "holdout_tokens": 27036,
+      "encode_s": 19.68361399997957
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 5793,
+      "holdout_ratio": 4.580012751036022,
+      "train_ratio": 4.860241929530378,
+      "holdout_tokens": 25096,
+      "encode_s": 24.59244312508963
+    },
+    {
+      "name": "BasicTokenizer",
+      "vocab_size": 8192,
+      "holdout_ratio": 4.867451511815025,
+      "train_ratio": 5.356015526939705,
+      "holdout_tokens": 23614,
+      "encode_s": 30.191674583940767
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 256,
+      "holdout_ratio": 1.0,
+      "train_ratio": 1.0,
+      "holdout_tokens": 114940,
+      "encode_s": 0.02327375009190291
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 362,
+      "holdout_ratio": 1.791570546792194,
+      "train_ratio": 1.7760225985216929,
+      "holdout_tokens": 64156,
+      "encode_s": 0.06434583303052932
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 512,
+      "holdout_ratio": 2.1768527111228955,
+      "train_ratio": 2.1545657702808843,
+      "holdout_tokens": 52801,
+      "encode_s": 0.07096970803104341
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 724,
+      "holdout_ratio": 2.4875557286932435,
+      "train_ratio": 2.4487797361275683,
+      "holdout_tokens": 46206,
+      "encode_s": 0.07447258301544935
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 1024,
+      "holdout_ratio": 2.7452291671642506,
+      "train_ratio": 2.7021894129511925,
+      "holdout_tokens": 41869,
+      "encode_s": 0.07827037491369992
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 1448,
+      "holdout_ratio": 2.963516823514245,
+      "train_ratio": 2.94080148044158,
+      "holdout_tokens": 38785,
+      "encode_s": 0.07885333406738937
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 2048,
+      "holdout_ratio": 3.17137102337003,
+      "train_ratio": 3.1704905852487326,
+      "holdout_tokens": 36243,
+      "encode_s": 0.08032204094342887
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 2896,
+      "holdout_ratio": 3.355912408759124,
+      "train_ratio": 3.389098476993109,
+      "holdout_tokens": 34250,
+      "encode_s": 0.08272441697772592
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 4096,
+      "holdout_ratio": 3.5104758414269135,
+      "train_ratio": 3.5914354738154612,
+      "holdout_tokens": 32742,
+      "encode_s": 0.0834846249781549
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 5793,
+      "holdout_ratio": 3.642759800969797,
+      "train_ratio": 3.7755339455854764,
+      "holdout_tokens": 31553,
+      "encode_s": 0.08463129203300923
+    },
+    {
+      "name": "RegexTokenizer",
+      "vocab_size": 8192,
+      "holdout_ratio": 3.752407691554308,
+      "train_ratio": 3.9430260613631307,
+      "holdout_tokens": 30631,
+      "encode_s": 0.08486266701947898
+    }
+  ]
+}
