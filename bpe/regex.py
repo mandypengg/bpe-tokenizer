@@ -19,6 +19,22 @@ from .base import Tokenizer, get_stats, merge
 
 # the two patterns in the wild. GPT-4's differs in that it case-folds the
 # contraction list, caps number runs at 3 digits, and treats newlines specially.
+#
+# The ` ?` in ` ?\p{L}+` is the whole reason GPT-2 tokens look the way they do.
+# A word chunk may swallow ONE leading space, so " dog" is a single chunk rather
+# than " " + "dog". Three consequences for token boundaries:
+#
+#   1. Space binds forward, to the word that follows it, never backward. No
+#      token ever ends in a space (in a trained vocab), and mid-sentence tokens
+#      carry their space as a prefix.
+#   2. A word has two distinct token identities depending on what precedes it.
+#      "dog" at the start of a line and " dog" after a space are different
+#      chunks, so BPE learns them as different tokens with different ids.
+#   3. Only one space is absorbed. Given "  dog", ` ?\p{L}+` cannot match at the
+#      first space (the optional space is followed by another space, not a
+#      letter), so `\s+(?!\S)` takes the extra space as its own chunk and the
+#      word chunk is " dog". A run of n spaces before a word splits as n-1
+#      spaces + " word".
 GPT2_SPLIT_PATTERN = (
     r"""'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"""
 )
@@ -31,7 +47,9 @@ GPT4_SPLIT_PATTERN = (
 class RegexTokenizer(Tokenizer):
     def __init__(self, pattern: str | None = None):
         super().__init__()
-        self.pattern = GPT4_SPLIT_PATTERN if pattern is None else pattern
+        # GPT-2's pattern is the default: this package's correctness target is
+        # GPT-2, and GPT2Tokenizer inherits from here.
+        self.pattern = GPT2_SPLIT_PATTERN if pattern is None else pattern
         self.compiled_pattern = re.compile(self.pattern)
 
     def train(self, text: str, vocab_size: int, verbose: bool = False):
@@ -80,9 +98,12 @@ class RegexTokenizer(Tokenizer):
 
     # -- encoding -------------------------------------------------------------
 
-    def _encode_chunk(self, text_bytes: bytes) -> list[int]:
+    def _encode_chunk(self, text_bytes: bytes,
+                      ranks: dict[tuple[int, int], int] | None = None) -> list[int]:
         ids = self._byte_ids(text_bytes)
-        ranks = self.merge_ranks()
+        # callers looping over chunks pass `ranks` in; rebuilding it per chunk
+        # is O(chunks x merges), which dominates encoding on a 50k-merge vocab
+        ranks = self.merge_ranks() if ranks is None else ranks
         while len(ids) >= 2:
             stats = get_stats(ids)
             pair = min(stats, key=lambda p: ranks.get(p, float("inf")))
@@ -93,9 +114,12 @@ class RegexTokenizer(Tokenizer):
 
     def encode_ordinary(self, text: str) -> list[int]:
         """Encode text, ignoring special tokens entirely (they get BPE'd)."""
+        ranks = self.merge_ranks()
         ids = []
         for chunk in re.findall(self.compiled_pattern, text):
-            ids.extend(self._encode_chunk(chunk.encode("utf-8")))
+            # each chunk is BPE'd on its own and the results concatenated, so
+            # no merge can ever reach across a chunk boundary
+            ids.extend(self._encode_chunk(chunk.encode("utf-8"), ranks))
         return ids
 
     def encode(self, text: str, allowed_special: str | set[str] = "none_raise"):
@@ -128,8 +152,11 @@ class RegexTokenizer(Tokenizer):
         if not special:
             return self.encode_ordinary(text)
 
-        # capture-group split keeps the special tokens themselves in the output
-        special_pattern = "(" + "|".join(re.escape(k) for k in special) + ")"
+        # capture-group split keeps the special tokens themselves in the output.
+        # longest first, so that when one special token is a prefix of another
+        # ("<|end|>" vs "<|endoftext|>") alternation picks the longer one.
+        ordered = sorted(special, key=len, reverse=True)
+        special_pattern = "(" + "|".join(re.escape(k) for k in ordered) + ")"
         chunks = re.split(special_pattern, text)
 
         ids = []
