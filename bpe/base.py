@@ -98,6 +98,9 @@ class Tokenizer:
         # str -> int, e.g. {"<|endoftext|>": 50256}
         self.special_tokens: dict[str, int] = {}
         self.inverse_special_tokens: dict[int, str] = {}
+        # byte value -> id of its single-byte token. Identity for tokenizers we
+        # train ourselves; pretrained vocabularies permute it (see gpt2.py).
+        self.byte_to_id: dict[int, int] = {b: b for b in range(256)}
         # int -> bytes
         self.vocab: dict[int, bytes] = self._build_vocab()
 
@@ -127,15 +130,15 @@ class Tokenizer:
         """
         Seed ids for a piece of text: one token per raw byte.
 
-        For tokenizers we train ourselves, token id == byte value for the
-        first 256 ids, so this is the identity. GPT-2 permutes that mapping
-        and overrides this hook.
+        Goes through `byte_to_id`, so it is the identity for a tokenizer we
+        trained and a permutation for a pretrained one.
         """
-        return list(text_bytes)
+        byte_to_id = self.byte_to_id
+        return [byte_to_id[b] for b in text_bytes]
 
     def _build_vocab(self) -> dict[int, bytes]:
         """Derive int -> bytes from the 256 byte tokens plus the merges."""
-        vocab = {idx: bytes([idx]) for idx in range(256)}
+        vocab = {idx: bytes([b]) for b, idx in self.byte_to_id.items()}
         # replayed in insertion order, so children always precede parents
         for (p0, p1), idx in self.merges.items():
             vocab[idx] = vocab[p0] + vocab[p1]

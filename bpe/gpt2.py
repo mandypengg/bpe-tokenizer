@@ -11,9 +11,9 @@ Two GPT-2 specifics matter here:
    vocab files stay plain text. We invert that mapping to recover the raw
    bytes behind every token.
 2. The 256 single-byte tokens are NOT ids 0..255. `encoder.json` assigns them
-   in `bytes_to_unicode` order, so byte 0x21 ('!') is id 0. Everything else in
-   this package assumes id == byte value for the base tokens, so we override
-   `_byte_ids` to seed encoding with GPT-2's permuted ids instead.
+   in `bytes_to_unicode` order, so byte 0x21 ('!') is id 0. We hand that
+   permutation to the base class as `byte_to_id`, which seeds encoding and
+   the vocabulary from it.
 """
 
 from __future__ import annotations
@@ -112,8 +112,6 @@ class GPT2Tokenizer(RegexTokenizer):
     """
 
     def __init__(self):
-        # must exist before Tokenizer.__init__ calls _build_vocab()
-        self.byte_to_id: dict[int, int] = {}
         super().__init__(pattern=GPT2_SPLIT_PATTERN)
 
     # -- construction ---------------------------------------------------------
@@ -179,19 +177,6 @@ class GPT2Tokenizer(RegexTokenizer):
         return cls.from_files(encoder_json, vocab_bpe)
 
     # -- GPT-2 specific overrides --------------------------------------------
-
-    def _byte_ids(self, text_bytes: bytes) -> list[int]:
-        return [self.byte_to_id[b] for b in text_bytes]
-
-    def _build_vocab(self) -> dict[int, bytes]:
-        if not self.byte_to_id:
-            return {}  # not loaded yet
-        vocab = {idx: bytes([b]) for b, idx in self.byte_to_id.items()}
-        for (p0, p1), idx in self.merges.items():
-            vocab[idx] = vocab[p0] + vocab[p1]
-        for special, idx in self.special_tokens.items():
-            vocab[idx] = special.encode("utf-8")
-        return vocab
 
     def train(self, text: str, vocab_size: int, verbose: bool = False):
         raise NotImplementedError(
