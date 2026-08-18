@@ -43,6 +43,20 @@ GPT4_SPLIT_PATTERN = (
     r"""| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 )
 
+# o200k_base (GPT-4o and later). Two letter alternatives instead of one, so
+# that a capitalized word splits as one chunk rather than shedding its first
+# letter, and the contraction suffix is matched as part of the word chunk
+# rather than as its own alternative.
+O200K_SPLIT_PATTERN = "|".join([
+    r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]*[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
+    r"""[^\r\n\p{L}\p{N}]?[\p{Lu}\p{Lt}\p{Lm}\p{Lo}\p{M}]+[\p{Ll}\p{Lm}\p{Lo}\p{M}]*(?i:'s|'t|'re|'ve|'m|'ll|'d)?""",
+    r"""\p{N}{1,3}""",
+    r""" ?[^\s\p{L}\p{N}]+[\r\n/]*""",
+    r"""\s*[\r\n]+""",
+    r"""\s+(?!\S)""",
+    r"""\s+""",
+])
+
 
 class RegexTokenizer(Tokenizer):
     def __init__(self, pattern: str | None = None):
