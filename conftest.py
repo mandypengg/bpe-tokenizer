@@ -1,22 +1,20 @@
 # Present so pytest puts the repo root on sys.path and `import bpe` resolves.
 """
 Shared fixtures. The English corpus used by the roundtrip tests is downloaded
-once and cached under `data/`, the same arrangement `bpe.gpt2` uses for
-encoder.json / vocab.bpe: `data/` is gitignored, so nothing large lands in the
-repo, and tests that need the network skip cleanly when it is unavailable.
+once and cached under `data/` through the same helper the pretrained
+tokenizers use: `data/` is gitignored, so nothing large lands in the repo, and
+tests that need the network skip cleanly when it is unavailable.
 """
 
 from __future__ import annotations
 
-import shutil
-import ssl
-import urllib.request
 from pathlib import Path
 
 import pytest
 
-REPO_ROOT = Path(__file__).resolve().parent
-CORPUS_DIR = REPO_ROOT / "data" / "corpus"
+from bpe.download import DATA_DIR, download_file
+
+CORPUS_DIR = DATA_DIR / "corpus"
 
 # "The Adventures of Sherlock Holmes", public domain, ~575 KB of English prose
 # once the Project Gutenberg boilerplate is stripped.
@@ -27,34 +25,14 @@ _START_MARKER = "*** START OF THE PROJECT GUTENBERG EBOOK"
 _END_MARKER = "*** END OF THE PROJECT GUTENBERG EBOOK"
 
 
-def _ssl_context() -> ssl.SSLContext:
-    """Same certifi-then-system fallback as bpe/gpt2.py; see the note there."""
-    try:
-        import certifi
-    except ImportError:
-        return ssl.create_default_context()
-    return ssl.create_default_context(cafile=certifi.where())
-
-
 def download_corpus(cache_dir: Path = CORPUS_DIR) -> Path:
     """Fetch the corpus into `cache_dir` if not already there."""
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    target = cache_dir / CORPUS_FILE
-    if target.exists():
-        return target
-    # download to a temp name first so an interrupted fetch can't leave a
-    # truncated file that later runs treat as cached
-    tmp = target.with_suffix(target.suffix + ".part")
-    request = urllib.request.Request(
+    return download_file(
         CORPUS_URL,
+        cache_dir / CORPUS_FILE,
         # gutenberg.org refuses urllib's default User-Agent
-        headers={"User-Agent": "Mozilla/5.0 (compatible; bpe-tokenizer tests)"},
+        user_agent="Mozilla/5.0 (compatible; bpe-tokenizer tests)",
     )
-    with urllib.request.urlopen(request, context=_ssl_context(), timeout=60) as response:
-        with open(tmp, "wb") as f:
-            shutil.copyfileobj(response, f)
-    tmp.replace(target)
-    return target
 
 
 def strip_gutenberg_boilerplate(raw: str) -> str:

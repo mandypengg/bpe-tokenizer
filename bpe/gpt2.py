@@ -20,22 +20,28 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
-import ssl
-import urllib.request
 from functools import lru_cache
 from pathlib import Path
 
+from .download import DATA_DIR, download_file
 from .regex import GPT2_SPLIT_PATTERN, RegexTokenizer
 
 ENDOFTEXT = "<|endoftext|>"
 
-GPT2_FILE_URLS = {
-    "encoder.json": "https://openaipublic.blob.core.windows.net/gpt-2/models/124M/encoder.json",
-    "vocab.bpe": "https://openaipublic.blob.core.windows.net/gpt-2/models/124M/vocab.bpe",
+# url and expected sha256 per file. The hashes are the ones tiktoken pins for
+# the same files served from its own url; both paths serve identical bytes.
+GPT2_FILES = {
+    "encoder.json": (
+        "https://openaipublic.blob.core.windows.net/gpt-2/models/124M/encoder.json",
+        "196139668be63f3b5d6574427317ae82f612a97c5d1cdaf36ed2256dbf636783",
+    ),
+    "vocab.bpe": (
+        "https://openaipublic.blob.core.windows.net/gpt-2/models/124M/vocab.bpe",
+        "1ce1664773c50f3e0cc8842619a93edc4624525b728b188a9e0be33b7726adc5",
+    ),
 }
 
-DEFAULT_CACHE_DIR = Path(__file__).resolve().parent.parent / "data" / "gpt2"
+DEFAULT_CACHE_DIR = DATA_DIR / "gpt2"
 
 
 @lru_cache()
@@ -69,37 +75,11 @@ def unicode_to_bytes() -> dict[str, int]:
     return {ch: b for b, ch in bytes_to_unicode().items()}
 
 
-def _ssl_context() -> ssl.SSLContext:
-    """
-    Default SSL context, backed by certifi's roots when they're available.
-
-    A stock macOS python often has no usable CA store, so a plain urlopen
-    fails with CERTIFICATE_VERIFY_FAILED. certifi ships as a transitive
-    dependency of tiktoken; fall back to the system store without it.
-    """
-    try:
-        import certifi
-    except ImportError:
-        return ssl.create_default_context()
-    return ssl.create_default_context(cafile=certifi.where())
-
-
 def download_gpt2_files(cache_dir: str | os.PathLike = DEFAULT_CACHE_DIR) -> Path:
     """Fetch encoder.json and vocab.bpe into `cache_dir` if not already there."""
     cache_dir = Path(cache_dir)
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    context = _ssl_context()
-    for name, url in GPT2_FILE_URLS.items():
-        target = cache_dir / name
-        if target.exists():
-            continue
-        # download to a temp name first so an interrupted fetch can't leave a
-        # truncated file that later runs treat as cached
-        tmp = target.with_suffix(target.suffix + ".part")
-        with urllib.request.urlopen(url, context=context, timeout=60) as response:
-            with open(tmp, "wb") as f:
-                shutil.copyfileobj(response, f)
-        tmp.replace(target)
+    for name, (url, digest) in GPT2_FILES.items():
+        download_file(url, cache_dir / name, expected_sha256=digest)
     return cache_dir
 
 
