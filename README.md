@@ -149,15 +149,58 @@ reasons that have nothing to do with BPE.
 `whitespace` covers the cases where GPT-2's `\s+(?!\S)` rule bites, such as a
 run of *n* spaces before a word splitting as *n*−1 spaces plus `␣word`.
 
-What is **not** claimed: only the GPT-2 encoding is verified against an
-external reference. `BasicTokenizer` and `RegexTokenizer` train their own
+### 3. The same parity, for the other four published encodings
+
+`test_ranks.py` runs `r50k_base`, `p50k_base`, `cl100k_base` and `o200k_base`
+against tiktoken: the full 5,000-case corpus for the latter two, a
+category-spanning sample for all four, 100,000 characters of prose each,
+roundtrip over the corpus, and special-token refusals compared decision for
+decision against tiktoken's.
+
+Merge recovery gets its own checks, because a wrong reconstruction encodes
+subtly wrong rather than loudly wrong: the recovered merges must rebuild each
+published vocabulary byte for byte, and against `r50k_base` they must equal
+GPT-2's own merge list from `vocab.bpe`.
+
+What is **not** claimed: `BasicTokenizer` and `RegexTokenizer` train their own
 vocabularies and are checked against the roundtrip property and internal
-invariants, not against any third-party implementation. `GPT4_SPLIT_PATTERN`
-ships and its splitting behaviour is tested, but no GPT-4 vocabulary is loaded
-and nothing here is compared against `cl100k_base`.
+invariants, not against any third-party implementation. Nothing here trains a
+vocabulary that reproduces someone else's — only encoders are verified, and
+only against vocabularies OpenAI published.
 
 Tests that need the network (OpenAI's vocab files, tiktoken's data, the
 Gutenberg corpus) skip cleanly when it is unavailable rather than failing.
+
+## Speed
+
+`tiktoken` is Rust; this is Python, and the gap is real. On 200,000
+characters of the Sherlock Holmes corpus, encoding throughput:
+
+| | GPT-2 | cl100k_base |
+|---|---|---|
+| this package, cold cache | 5.2 MB/s | 4.3 MB/s |
+| this package, warm cache | 17.9 MB/s | 18.8 MB/s |
+| `tiktoken` | 16.4 MB/s | 17.7 MB/s |
+
+The warm row is **not** a claim of parity on equal work. tiktoken re-encodes
+every chunk every time; this package caches chunk encodings, so a warm run is
+mostly dictionary hits. That is a genuine advantage on real documents, which
+repeat words heavily, and no advantage at all on text that never repeats.
+The cold row is the honest like-for-like number: about 3x slower.
+
+Three things got it there from an original 1.2 MB/s. The pair-priority table
+is built once rather than per call, which on a 200,000-merge vocabulary was
+costing more than the encoding. The merge loop scans for the lowest-ranked
+pair instead of building a counts dictionary per round. And chunk encodings
+are cached.
+
+What is deliberately *not* done: the merge loop is still an O(n²) scan over
+each chunk rather than a heap over a linked list. Chunks are words, so n is
+small and the constant factor wins; a 10,000-character run of one character
+encodes in about a millisecond. Each round merges every occurrence of the
+winning pair, which is what keeps those long runs from going quadratic —
+merging one occurrence per round is equally correct and around a thousand
+times slower, so `test_long_runs_do_not_go_quadratic` guards the shape.
 
 ## Compression
 
@@ -318,18 +361,27 @@ python3 -m venv .venv
 .venv/bin/python -m pytest
 ```
 
-The suite takes just over a minute, most of it in the two training runs in
-`test_roundtrip.py`.
+The suite takes about 40 seconds, most of it in the two training runs in
+`test_roundtrip.py`. First run also downloads the vocab files (~9 MB) and the
+Gutenberg corpus into `data/`.
 
 ## Notes
 
 - **Merges are ordered**; position in `Tokenizer.merges` is the priority.
   Encoding applies the lowest-ranked eligible pair, which is what makes
   encoding agree with training.
-- **GPT-2's single-byte tokens are not ids 0..255.** `encoder.json` assigns
-  them in `bytes_to_unicode` order, so byte `0x21` (`!`) is id 0.
-  `GPT2Tokenizer` overrides `_byte_ids` to seed encoding with that
-  permutation; tokenizers trained here use the identity mapping.
+- **Pretrained single-byte tokens are not ids 0..255.** `encoder.json`
+  assigns them in `bytes_to_unicode` order, so byte `0x21` (`!`) is id 0;
+  the `.tiktoken` files permute them differently again. The base class carries
+  that permutation as `byte_to_id`, which is the identity for tokenizers
+  trained here.
+- **A `.tiktoken` file does not contain its merges**, only token bytes and
+  ranks. `recover_merges()` reconstructs them; the rank is the merge order,
+  which is what makes reconstruction possible at all.
+- **Encoding caches chunks, and the cache is invalidated with the merges.**
+  A split pattern makes chunks words, and real text repeats words, so the
+  cache carries most of a document. It hangs off the `merges` setter so
+  retraining cannot leave a stale entry behind.
 - **`bytes_to_unicode` is a reversible byte-to-printable-character map**, so
   GPT-2's vocab files can stay plain text with no token containing whitespace
   or a control character. `unicode_to_bytes` inverts it.
