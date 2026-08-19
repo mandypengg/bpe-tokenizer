@@ -157,7 +157,9 @@ def test_special_token_roundtrips(tok_with_specials):
 
 
 def test_none_raise_is_the_default(tok_with_specials):
-    with pytest.raises(AssertionError):
+    # ValueError, not an assertion: `python -O` strips asserts, and this
+    # check is the one keeping a special token out of untrusted text
+    with pytest.raises(ValueError, match="disallowed"):
         tok_with_specials.encode("hello<|endoftext|>world")
 
 
@@ -171,8 +173,56 @@ def test_allowed_special_none_treats_it_as_ordinary_text(tok_with_specials):
 def test_allowed_special_accepts_an_explicit_set(tok_with_specials):
     tok = tok_with_specials
     tok.register_special_tokens({"<|endoftext|>": 300, "<|pad|>": 301})
-    ids = tok.encode("a<|endoftext|>b<|pad|>c", allowed_special={"<|endoftext|>"})
+    ids = tok.encode("a<|endoftext|>b", allowed_special={"<|endoftext|>"})
+    assert 300 in ids
+
+
+def test_naming_some_specials_refuses_the_rest(tok_with_specials):
+    """
+    tiktoken's rule, and the one that matters for untrusted input: allowing
+    <|endoftext|> is not consent to silently BPE <|pad|> as plain text.
+    """
+    tok = tok_with_specials
+    tok.register_special_tokens({"<|endoftext|>": 300, "<|pad|>": 301})
+    with pytest.raises(ValueError, match=r"<\|pad\|>"):
+        tok.encode("a<|endoftext|>b<|pad|>c", allowed_special={"<|endoftext|>"})
+
+
+def test_disallowed_special_none_restores_the_lenient_behaviour(tok_with_specials):
+    tok = tok_with_specials
+    tok.register_special_tokens({"<|endoftext|>": 300, "<|pad|>": 301})
+    ids = tok.encode("a<|endoftext|>b<|pad|>c",
+                     allowed_special={"<|endoftext|>"}, disallowed_special="none")
     assert 300 in ids and 301 not in ids
+    assert tok.decode(ids) == "a<|endoftext|>b<|pad|>c"
+
+
+def test_disallowed_special_accepts_an_explicit_set(tok_with_specials):
+    tok = tok_with_specials
+    tok.register_special_tokens({"<|endoftext|>": 300, "<|pad|>": 301})
+    # only <|pad|> is policed, so <|endoftext|> passes through as text
+    ids = tok.encode("a<|endoftext|>b", allowed_special="none",
+                     disallowed_special={"<|pad|>"})
+    assert 300 not in ids
+    with pytest.raises(ValueError, match=r"<\|pad\|>"):
+        tok.encode("a<|pad|>b", allowed_special="none",
+                   disallowed_special={"<|pad|>"})
+
+
+def test_allowed_special_none_never_raises(tok_with_specials):
+    """"none" asks for specials as plain text, so nothing is left to refuse."""
+    tok = tok_with_specials
+    assert tok.encode("a<|endoftext|>b", allowed_special="none")
+
+
+def test_unregistered_token_in_allowed_special_is_rejected(tok_with_specials):
+    with pytest.raises(ValueError, match="not registered"):
+        tok_with_specials.encode("hi", allowed_special={"<|nope|>"})
+
+
+def test_unknown_disallowed_special_is_rejected(tok_with_specials):
+    with pytest.raises(ValueError, match="disallowed_special"):
+        tok_with_specials.encode("hi", disallowed_special="sometimes")
 
 
 def test_unknown_allowed_special_is_rejected(tok_with_specials):

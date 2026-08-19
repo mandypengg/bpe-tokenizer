@@ -110,6 +110,60 @@ class RegexTokenizer(Tokenizer):
                 raise ValueError(f"invalid token id: {idx}")
         return b"".join(parts).decode("utf-8", errors="replace")
 
+    # -- which special tokens are in play -------------------------------------
+
+    def _allowed_specials(self, allowed_special) -> dict[str, int]:
+        """The special tokens to split out of the text, per `allowed_special`."""
+        if allowed_special == "all":
+            return self.special_tokens
+        if allowed_special in ("none", "none_raise"):
+            return {}
+        if isinstance(allowed_special, (set, frozenset, list, tuple)):
+            unknown = set(allowed_special) - set(self.special_tokens)
+            if unknown:
+                raise ValueError(f"not registered special tokens: {sorted(unknown)}")
+            return {k: v for k, v in self.special_tokens.items() if k in allowed_special}
+        raise ValueError(f"allowed_special={allowed_special!r} not understood")
+
+    def _disallowed_specials(self, allowed_special, disallowed_special,
+                             special: dict[str, int]) -> set[str]:
+        """
+        The special tokens whose mere presence in the text is an error.
+
+        Defaults follow `allowed_special`: naming some tokens means the rest
+        are refused, while "none" asks for them to be treated as plain text
+        and so refuses nothing.
+        """
+        if disallowed_special is None:
+            disallowed_special = "none" if allowed_special == "none" else "all"
+        if disallowed_special == "all":
+            return set(self.special_tokens) - set(special)
+        if disallowed_special == "none":
+            return set()
+        if isinstance(disallowed_special, (set, frozenset, list, tuple)):
+            return set(disallowed_special)
+        raise ValueError(f"disallowed_special={disallowed_special!r} not understood")
+
+    def _reject_disallowed(self, text: str, forbidden: set[str]):
+        """
+        Raise if any forbidden special token appears in `text`.
+
+        One alternation rather than a substring scan per token: with 1,000+
+        special tokens (o200k_harmony has that many) the naive loop costs more
+        than the encoding it guards. This was an `assert`, which `python -O`
+        strips, taking the check with it.
+        """
+        pattern = "|".join(re.escape(token) for token in sorted(forbidden))
+        match = re.search(pattern, text)
+        if match is None:
+            return
+        raise ValueError(
+            f"text contains the special token {match.group()!r}, which is "
+            f"disallowed. Pass allowed_special={{{match.group()!r}, ...}} to "
+            f"encode it as one token, allowed_special=\"none\" to encode it as "
+            f"ordinary text, or disallowed_special=\"none\" to ignore this."
+        )
+
     # -- encoding -------------------------------------------------------------
 
     def _encode_chunk(self, text_bytes: bytes,
@@ -141,32 +195,29 @@ class RegexTokenizer(Tokenizer):
             ids.extend(encoded)
         return ids
 
-    def encode(self, text: str, allowed_special: str | set[str] = "none_raise"):
+    def encode(self, text: str, allowed_special: str | set[str] = "none_raise",
+               disallowed_special: str | set[str] | None = None):
         """
         Encode text, handling special tokens per `allowed_special`:
 
           "all"         - every registered special token is recognized
           "none"        - none are; they are encoded as ordinary text
           "none_raise"  - none are, and their presence in `text` raises (default)
-          set of str    - only these are recognized
+          set of str    - only these are recognized, and any *other* special
+                          token appearing in `text` raises
+
+        `disallowed_special` overrides which tokens raise: "all" for every
+        special token not allowed, or an explicit set. This mirrors tiktoken,
+        where encoding a control token that arrived in untrusted text is a
+        mistake worth an exception rather than a silent fallback to BPE.
 
         Special tokens are split out of the text BEFORE any BPE runs, so their
         bytes are never eligible for merging.
         """
-        if allowed_special == "all":
-            special = self.special_tokens
-        elif allowed_special == "none":
-            special = {}
-        elif allowed_special == "none_raise":
-            special = {}
-            assert all(token not in text for token in self.special_tokens), (
-                "text contains a special token; pass allowed_special to say "
-                "how it should be handled"
-            )
-        elif isinstance(allowed_special, (set, frozenset)):
-            special = {k: v for k, v in self.special_tokens.items() if k in allowed_special}
-        else:
-            raise ValueError(f"allowed_special={allowed_special!r} not understood")
+        special = self._allowed_specials(allowed_special)
+        forbidden = self._disallowed_specials(allowed_special, disallowed_special, special)
+        if forbidden:
+            self._reject_disallowed(text, forbidden)
 
         if not special:
             return self.encode_ordinary(text)

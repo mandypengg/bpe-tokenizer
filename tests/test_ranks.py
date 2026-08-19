@@ -274,3 +274,65 @@ def test_load_mergeable_ranks_tolerates_a_trailing_newline(tmp_path):
         base64.b64encode(t) + b" " + str(r).encode() for t, r in toy_ranks().items()
     ) + b"\n\n")
     assert load_mergeable_ranks(path) == toy_ranks()
+
+
+# -- refusing special tokens the way tiktoken does ----------------------------
+
+
+DISALLOWED_CASES = [
+    # (text, allowed_special) -> both must raise, or neither, and agree on ids
+    ("plain text with no specials at all", "none_raise"),
+    ("a<|endoftext|>b", "none_raise"),
+    ("a<|endoftext|>b", "all"),
+    ("a<|endoftext|>b", frozenset({"<|endoftext|>"})),
+    ("a<|endoftext|>b<|fim_prefix|>c", frozenset({"<|endoftext|>"})),
+    ("a<|fim_prefix|>b", frozenset({"<|endoftext|>"})),
+    ("<|endofprompt|>", frozenset({"<|endoftext|>"})),
+    ("<|endoftext|><|endoftext|>", "all"),
+]
+
+
+@pytest.mark.parametrize("text,allowed", DISALLOWED_CASES)
+def test_disallowed_specials_agree_with_tiktoken(text, allowed, tokenizers, references):
+    """
+    Allowing one special token is not consent to silently BPE another. Both
+    implementations must refuse the same inputs, and agree on the rest.
+    """
+    ours, theirs = tokenizers["cl100k_base"], references["cl100k_base"]
+    allowed_them = allowed if isinstance(allowed, frozenset) else (
+        "all" if allowed == "all" else set()
+    )
+
+    def run(fn, arg):
+        try:
+            return fn(text, allowed_special=arg)
+        except ValueError:
+            return "raised"
+
+    assert run(ours.encode, allowed) == run(theirs.encode, allowed_them)
+
+
+def test_disallowed_check_scales_to_a_large_special_vocabulary(tokenizers):
+    """
+    The check used to be a substring scan per special token. o200k_harmony
+    registers over a thousand of them, so that shape costs more than the
+    encoding it guards; this runs one alternation instead.
+    """
+    import time
+
+    tok = tokenizers["o200k_base"]
+    original = dict(tok.special_tokens)
+    try:
+        tok.register_special_tokens(
+            {**original, **{f"<|reserved_{i}|>": 200013 + i for i in range(1075)}}
+        )
+        text = "the quick brown fox jumps over the lazy dog " * 500
+
+        start = time.perf_counter()
+        for _ in range(5):
+            tok.encode(text)
+        assert time.perf_counter() - start < 5.0
+    finally:
+        # the fixture is session-scoped; leaving 1,075 extra specials
+        # registered would break every test that runs after this one
+        tok.register_special_tokens(original)

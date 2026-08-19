@@ -15,7 +15,7 @@ bpe/
   gpt2.py     GPT2Tokenizer   - loads OpenAI's encoder.json / vocab.bpe
   ranks.py    RanksTokenizer  - loads .tiktoken files, recovering the merges
   download.py caching, hash-verified downloads of the vocab files
-tests/        279 tests, including exact-match tests against tiktoken
+tests/        294 tests, including exact-match tests against tiktoken
 benchmarks/   compression_ratio.py - bytes per token vs vocab size, held out
 ```
 
@@ -90,7 +90,7 @@ agree exactly, because a space precedes every occurrence of `low` anyway.
 
 ## Correctness
 
-279 tests, `.venv/bin/python -m pytest`. Two properties are claimed, and they
+294 tests, `.venv/bin/python -m pytest`. Two properties are claimed, and they
 are claimed precisely.
 
 ### 1. Roundtrip: `decode(encode(t)) == t`
@@ -263,9 +263,16 @@ tok.encode("hi<|endoftext|>")                          # raises: default is none
 ```
 
 The default is `none_raise` so that a special token arriving inside untrusted
-user text is an error you see, rather than a silent injection.
+user text is an error you see, rather than a silent injection. Naming some
+tokens refuses the rest, which is tiktoken's rule and the one that matters:
+allowing `<|endoftext|>` is not consent to silently BPE `<|pad|>` as text.
 
-### GPT-2
+```python
+tok.encode(text, allowed_special={"<|endoftext|>"})                          # raises on <|pad|>
+tok.encode(text, allowed_special={"<|endoftext|>"}, disallowed_special="none")  # doesn't
+```
+
+### GPT-2 and the .tiktoken encodings
 
 ```python
 gpt2 = GPT2Tokenizer.from_pretrained()   # downloads to data/gpt2/ once, then cached
@@ -276,9 +283,32 @@ gpt2.decode([31373, 995])                # 'hello world'
 len(gpt2.vocab)                          # 50257
 ```
 
-`GPT2Tokenizer.from_pretrained(download=False)` fails instead of hitting the
-network. `train()` and `load()` raise on this class: its merges come from
-OpenAI's files, and the point of it is to reproduce them exactly.
+```python
+from bpe import RanksTokenizer
+
+gpt4 = RanksTokenizer.from_pretrained("cl100k_base")   # or o200k_base, r50k_base, p50k_base
+gpt4.encode_ordinary("hello world")                    # [15339, 1917]
+len(gpt4.vocab)                                        # 100261
+```
+
+`from_pretrained(download=False)` fails instead of hitting the network.
+`train()` and `load()` raise on both classes: their merges come from OpenAI's
+files, and the point of them is to reproduce those exactly.
+
+The two classes exist because the file formats differ, and the difference is
+the interesting part. `vocab.bpe` lists the merges outright, in order.
+A `.tiktoken` file lists only token bytes and ranks — tiktoken never needs the
+merges, because it merges by looking a pair's concatenation up in the rank
+table. This package encodes by replaying an ordered merge list, so
+`recover_merges()` reconstructs one: the rank *is* the merge order, so
+replaying every merge below a token's own rank over its bytes leaves exactly
+the two pieces that formed it.
+
+That reconstruction is checked against ground truth rather than against
+itself. `r50k_base` is GPT-2's vocabulary in the newer format, so the merges
+recovered from it must equal the ones `vocab.bpe` states outright — same
+pairs, same ids, same order — and `test_recovered_r50k_merges_match_gpt2`
+asserts exactly that.
 
 ## Setup
 
