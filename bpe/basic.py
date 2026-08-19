@@ -50,14 +50,7 @@ class BasicTokenizer(Tokenizer):
         return text_bytes.decode("utf-8", errors="replace")
 
     def encode(self, text: str) -> list[int]:
+        # no split pattern, so the whole text is one chunk: the eligible pair
+        # learned earliest wins, repeatedly, until none are left
         ids = self._byte_ids(text.encode("utf-8"))
-        ranks = self.merge_ranks()
-        while len(ids) >= 2:
-            stats = get_stats(ids)
-            # the eligible pair learned earliest wins; pairs we never learned
-            # sort to infinity and are skipped
-            pair = min(stats, key=lambda p: ranks.get(p, float("inf")))
-            if pair not in ranks:
-                break  # nothing mergeable left
-            ids = merge(ids, pair, self.merges[pair])
-        return ids
+        return self._apply_merges(ids, self.merge_ranks())

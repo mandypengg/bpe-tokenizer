@@ -3,13 +3,19 @@
 A byte-pair-encoding tokenizer written from scratch, whose encoder reproduces
 GPT-2's tokenization exactly, token for token, verified against `tiktoken`.
 
+Five of OpenAI's published encodings load and match `tiktoken` token for
+token: `gpt2`, `r50k_base`, `p50k_base`, `cl100k_base` (GPT-3.5/GPT-4) and
+`o200k_base` (GPT-4o).
+
 ```
 bpe/
   base.py     get_stats / merge primitives, Tokenizer base class, save + load
   basic.py    BasicTokenizer  - byte-level BPE, no splitting
-  regex.py    RegexTokenizer  - GPT-2/GPT-4 split patterns + special tokens
+  regex.py    RegexTokenizer  - GPT-2/GPT-4/o200k split patterns + specials
   gpt2.py     GPT2Tokenizer   - loads OpenAI's encoder.json / vocab.bpe
-tests/        216 tests, including exact-match tests against tiktoken
+  ranks.py    RanksTokenizer  - loads .tiktoken files, recovering the merges
+  download.py caching, hash-verified downloads of the vocab files
+tests/        279 tests, including exact-match tests against tiktoken
 benchmarks/   compression_ratio.py - bytes per token vs vocab size, held out
 ```
 
@@ -84,7 +90,7 @@ agree exactly, because a space precedes every occurrence of `low` anyway.
 
 ## Correctness
 
-216 tests, `.venv/bin/python -m pytest`. Two properties are claimed, and they
+279 tests, `.venv/bin/python -m pytest`. Two properties are claimed, and they
 are claimed precisely.
 
 ### 1. Roundtrip: `decode(encode(t)) == t`

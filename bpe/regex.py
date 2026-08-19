@@ -114,26 +114,31 @@ class RegexTokenizer(Tokenizer):
 
     def _encode_chunk(self, text_bytes: bytes,
                       ranks: dict[tuple[int, int], int] | None = None) -> list[int]:
-        ids = self._byte_ids(text_bytes)
         # callers looping over chunks pass `ranks` in; rebuilding it per chunk
         # is O(chunks x merges), which dominates encoding on a 50k-merge vocab
         ranks = self.merge_ranks() if ranks is None else ranks
-        while len(ids) >= 2:
-            stats = get_stats(ids)
-            pair = min(stats, key=lambda p: ranks.get(p, float("inf")))
-            if pair not in ranks:
-                break
-            ids = merge(ids, pair, self.merges[pair])
-        return ids
+        return self._apply_merges(self._byte_ids(text_bytes), ranks)
 
     def encode_ordinary(self, text: str) -> list[int]:
         """Encode text, ignoring special tokens entirely (they get BPE'd)."""
         ranks = self.merge_ranks()
+        cache = self._chunk_cache
         ids = []
         for chunk in re.findall(self.compiled_pattern, text):
             # each chunk is BPE'd on its own and the results concatenated, so
             # no merge can ever reach across a chunk boundary
-            ids.extend(self._encode_chunk(chunk.encode("utf-8"), ranks))
+            piece = chunk.encode("utf-8")
+            encoded = cache.get(piece)
+            if encoded is None:
+                encoded = tuple(self._encode_chunk(piece, ranks))
+                # the split pattern makes chunks words, so the same handful
+                # recur constantly and this hits on most of a real document.
+                # Full: drop everything rather than let one adversarial
+                # document's chunks lock the common words out for good.
+                if len(cache) >= self.CHUNK_CACHE_MAX:
+                    cache.clear()
+                cache[piece] = encoded
+            ids.extend(encoded)
         return ids
 
     def encode(self, text: str, allowed_special: str | set[str] = "none_raise"):

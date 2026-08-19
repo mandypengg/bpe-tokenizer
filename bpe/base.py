@@ -90,9 +90,13 @@ class Tokenizer:
     Subclasses implement `train`, `encode`, and `decode`.
     """
 
+    # chunks cached while encoding. Real text repeats words heavily, so this
+    # is most of what makes encoding tolerable; see RegexTokenizer.
+    CHUNK_CACHE_MAX = 100_000
+
     def __init__(self):
         # (int, int) -> int. Insertion order IS merge order / priority.
-        self.merges: dict[tuple[int, int], int] = {}
+        self.merges = {}
         # str, the regex used to split text before BPE ("" means no splitting)
         self.pattern: str = ""
         # str -> int, e.g. {"<|endoftext|>": 50256}
@@ -115,16 +119,67 @@ class Tokenizer:
     def decode(self, ids: list[int]) -> str:
         raise NotImplementedError
 
-    # -- shared implementation -----------------------------------------------
+    # -- merges, and the caches that hang off them ---------------------------
+
+    @property
+    def merges(self) -> dict[tuple[int, int], int]:
+        return self._merges
+
+    @merges.setter
+    def merges(self, value: dict[tuple[int, int], int]):
+        # everything derived from the merge list is invalidated here rather
+        # than at each use site, so training or loading a new vocabulary into
+        # an existing tokenizer can't leave a stale cache behind
+        self._merges = value
+        self._ranks: dict[tuple[int, int], int] | None = None
+        self._chunk_cache: dict[bytes, tuple[int, ...]] = {}
 
     def merge_ranks(self) -> dict[tuple[int, int], int]:
         """
         Map each pair to its priority, lowest = merged first.
 
         Encoding always applies the *lowest-ranked* mergeable pair present,
-        which is what makes encoding agree with training.
+        which is what makes encoding agree with training. Cached: rebuilding
+        200,000 entries per call to `encode` dwarfs the encoding itself.
         """
-        return {pair: rank for rank, pair in enumerate(self.merges)}
+        if self._ranks is None:
+            self._ranks = {pair: rank for rank, pair in enumerate(self._merges)}
+        return self._ranks
+
+    def reset_cache(self):
+        """Drop the cached chunk encodings. Only affects speed."""
+        self._chunk_cache = {}
+
+    # -- shared implementation -----------------------------------------------
+
+    def _apply_merges(self, ids: list[int], ranks: dict[tuple[int, int], int]) -> list[int]:
+        """
+        Replay merges over `ids` until none apply, lowest rank first.
+
+        Each round scans for the lowest-ranked pair present and then merges
+        *every* occurrence of it, not just the first. Merging one at a time
+        gives the same answer — a merge can only create pairs ranked above the
+        one just applied, so the winner stays the winner until its last
+        occurrence is gone — but it costs a round per occurrence instead of a
+        round per distinct pair. On a chunk of 600 spaces that is the
+        difference between ~10 rounds and ~600, each round O(n).
+
+        The scan is a flat loop rather than a counts dict: we only need the
+        minimum, and building a dict per round is most of the cost when the
+        chunk is a word or two, which is the normal case.
+        """
+        merges = self._merges
+        while len(ids) >= 2:
+            best_pair, best_rank = None, len(ranks)
+            for i in range(len(ids) - 1):
+                pair = (ids[i], ids[i + 1])
+                rank = ranks.get(pair)
+                if rank is not None and rank < best_rank:
+                    best_pair, best_rank = pair, rank
+            if best_pair is None:
+                break  # nothing mergeable left
+            ids = merge(ids, best_pair, merges[best_pair])
+        return ids
 
     def _byte_ids(self, text_bytes: bytes) -> list[int]:
         """
